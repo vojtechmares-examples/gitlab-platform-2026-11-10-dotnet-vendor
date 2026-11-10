@@ -1,0 +1,78 @@
+# The vendor's side: build, test and publish a container image. Versions are git tags (v1.0.0 -> image tag 1.0.0).
+# The customer's deployment repository (dotnet-vendor-deploy) pins one of these tags; the vendor never deploys.
+#   test      xUnit tests (JUnit report)
+#   package   dotnet publish, then docker build on the ASP.NET Core image from MCR, push to this project's Container Registry
+
+include:
+  - project: examples/ci-templates
+    ref: main
+    file: /rocky.yml
+
+stages: [test, package]
+
+workflow:
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_COMMIT_TAG
+    - if: $CI_PIPELINE_SOURCE == "web"
+
+variables:
+  DOTNET_CLI_TELEMETRY_OPTOUT: "1"
+  DOTNET_NOLOGO: "1"
+  NUGET_PACKAGES: "$CI_PROJECT_DIR/.nuget"
+
+test:
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  stage: test
+  script:
+    - dotnet test -c Release --logger "junit;LogFilePath=$CI_PROJECT_DIR/TestResults/junit.xml"
+  cache:
+    key: nuget-dotnet-vendor
+    paths: [.nuget/]
+  artifacts:
+    when: always
+    reports:
+      junit: TestResults/junit.xml
+
+publish:
+  image: mcr.microsoft.com/dotnet/sdk:10.0
+  stage: package
+  needs: [test]
+  script:
+    - dotnet publish src/DotnetVendor/DotnetVendor.csproj -c Release -o publish
+  cache:
+    key: nuget-dotnet-vendor
+    paths: [.nuget/]
+  artifacts:
+    paths: [publish/]
+    expire_in: 1 week
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+build-image:
+  stage: package
+  image: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/docker:29
+  needs: [publish]
+  services:
+    - name: $CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX/docker:29-dind
+      alias: docker
+  variables:
+    DOCKER_TLS_CERTDIR: "/certs"
+    DOCKER_HOST: tcp://docker:2376
+    DOCKER_TLS_VERIFY: "1"
+    DOCKER_CERT_PATH: "/certs/client"
+    BUILDX_NO_DEFAULT_ATTESTATIONS: "1"   # the GitLab 19.5 registry rejects Docker 29's attestation manifests
+  rules:
+    - if: $CI_COMMIT_TAG =~ /^v\d+\.\d+\.\d+$/
+      variables:
+        APP_VERSION: ${CI_COMMIT_TAG#v}
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      variables:
+        APP_VERSION: main-$CI_COMMIT_SHORT_SHA
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin "$CI_REGISTRY"
+  script:
+    - docker build --pull --build-arg APP_VERSION="$APP_VERSION" -t "$CI_REGISTRY_IMAGE:$APP_VERSION" .
+    - docker push "$CI_REGISTRY_IMAGE:$APP_VERSION"
