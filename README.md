@@ -12,3 +12,14 @@ version tag into a container image. It has no database and no deployment. The cu
 | Access for the customer | a read-only deploy token (`read_registry`) of this project, held by the deploy repository |
 
 Release: `git tag v1.0.0 && git push origin v1.0.0`.
+
+## CI configuration
+
+This pipeline needs **no CI/CD variables** to be set. It has no deployment and does not use the deploy server. It works with the variables GitLab predefines:
+
+| Variable | Used for |
+|----------|----------|
+| `CI_REGISTRY`, `CI_REGISTRY_USER`, `CI_REGISTRY_PASSWORD`, `CI_REGISTRY_IMAGE` | `build-image` logs in to this project's Container Registry and pushes the image |
+| `CI_DEPENDENCY_PROXY_GROUP_IMAGE_PREFIX` | Pulls the `docker` and `docker:dind` images from Docker Hub through the group's Dependency Proxy |
+
+The customer reads the images with a read-only **deploy token** (`dotnet-vendor-deploy-pipeline`, scope `read_registry`) of this project (*Settings > Repository > Deploy tokens*). Its user name and token are the CI/CD variables `VENDOR_REGISTRY_USER` and `VENDOR_REGISTRY_TOKEN` of `dotnet-vendor-deploy`; nothing in this project reads them.
